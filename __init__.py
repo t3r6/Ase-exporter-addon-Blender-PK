@@ -23,7 +23,7 @@
 # **********************************
 bl_info = {
     "name": "ASCII Scene Exporter",
-    "author": "Richard Bartlett, MCampagnini, Rodrisilva",
+    "author": "Richard Bartlett, MCampagnini",
     "version": ( 4, 1, 1 ),
     "blender": ( 4, 1, 0 ),
     "api": 36079,
@@ -40,8 +40,8 @@ bl_info = {
 --  This script WILL NOT export skeletal meshes, these should be exported using a
 --  different file format.
 
---  More Information at
---  UDK Thread at 
+--  More Information at http://code.google.com/p/ase-export-vmc/
+--  UDK Thread at http://forums.epicgames.com/threads/776986-Blender-2-57-ASE-export
 """
 
 import os
@@ -49,10 +49,12 @@ import bpy
 import math
 import time
 from bpy_extras import node_shader_utils
+import mathutils
+import numpy as np
 
 # settings
 aseFloat = lambda x: '''{0: 0.4f}'''.format( x )
-optionScale = 16.0
+optionScale = 1.0
 optionSubmaterials = False
 optionSmoothingGroups = True
 optionAllowMultiMats = True
@@ -68,8 +70,7 @@ matList = []
 numMats = 0
 currentMatId = 0
 list_objects = []
-#X = []
-fpath = []
+
 
 
 #== Error ==================================================================
@@ -82,7 +83,7 @@ class Error( Exception ):
 #== Header =================================================================
 class cHeader:
     def __init__( self ):
-        self.comment = "Ascii Scene Exporter v4.10"
+        self.comment = "Ascii Scene Exporter v4.2"
 
     def __repr__( self ):
         return '''*3DSMAX_ASCIIEXPORT\t200\n*COMMENT "{0}"\n'''.format( self.comment )
@@ -122,7 +123,7 @@ class cMaterials:
         import mathutils
 
         self.material_list = []
-       
+
         # Get all of the materials used by non-collision object meshes  
         for object in bpy.context.selected_objects:
 
@@ -319,39 +320,42 @@ class cDiffusemap:
     def __init__( self, slot ):
         import os
         import bpy
-        import shutil
-        global X
         self.dump = ''
 
         if slot is None:
-           self.name = 'default'
-           self.mapclass = 'Bitmap'
-           self.bitmap = 'None'
+            self.name = 'default'
+            self.mapclass = 'Bitmap'
+            self.bitmap = 'None'
         else:
         # RS mod - Get texture images from slot nodes
-           material = bpy.data.materials[slot.name]
-           nodes = material.node_tree.nodes
-           principled = next(n for n in nodes if n.type == 'BSDF_PRINCIPLED')
-           base_color = principled.inputs['Base Color']
-           if base_color.is_linked:
-               link = base_color.links[0]
-           else:
-               removeDuplimeshes(list_objects)
-               raise TypeError('Mesh must have a Material and an image texture assigned')
+            material = bpy.data.materials[slot.name]
+            nodes = material.node_tree.nodes
+            principled = next(n for n in nodes if n.type == 'BSDF_PRINCIPLED')
+            base_color = principled.inputs['Base Color']
+            if base_color.is_linked:
+                link = base_color.links[0]
+            else:
+                removeDuplimeshes(list_objects)
+                raise TypeError('Mesh must have a Material and an image texture assigned')
 
-           link_node = link.from_node
+            link_node = link.from_node
+            self.mapclass = 'Bitmap'
+            try:
+                self.name = link_node.image.name
+                self.bitmap = bpy.path.abspath(link_node.image.filepath)
+            except:
+                self.name = 'notex'
+                self.bitmap = 'notex.dds'
 
-           if link_node.image is None:
-               removeDuplimeshes(list_objects)
-               raise TypeError(' Get one image texture from a file and assign it')
+            # if link_node.image is None:
+                # removeDuplimeshes(list_objects)
+                # raise TypeError(' Get one image texture from a file and assign it')
 
-           self.name = link_node.image.name
-           self.mapclass = 'Bitmap'
-           self.bitmap = bpy.path.abspath(link_node.image.filepath)
-           
-           #X.append(self.bitmap)
-           
-        
+            # self.name = link_node.image.name
+            # self.mapclass = 'Bitmap'
+            # self.bitmap = bpy.path.abspath(link_node.image.filepath)
+
+
         self.subno = 1
         self.amount = aseFloat(1.0)
         self.type = 'Screen'
@@ -529,7 +533,7 @@ class cMesh:
                 obj.uv_layer_stencil_index = activeUV
                 self.uvm_tvertlist = cTVertlist( object )
                 self.uvm_numtvertex = self.uvm_tvertlist.length
-                self.uvm_numtvfaces = len( object.data.uv_layer_stencil.data ) / 3
+                self.uvm_numtvfaces = int(len( object.data.uv_layer_stencil.data ) / 3)
                 self.uvm_tfacelist = cTFacelist( self.uvm_numtvfaces )
 
                 # if len(object.data.vertex_colors) > 0:
@@ -595,7 +599,6 @@ class cFacelist:
         global numMats
         global currentMatId
         global list_objects
-        global list_textures
         import bpy
 
 
@@ -782,9 +785,35 @@ class cCFace:
         return '''\t\t\t*MESH_CFACE {0} {1} {2} {3}\n'''.format( self.index, self.vertices[0], self.vertices[1], self.vertices[2] )
 class cNormallist:
     def __init__( self, object ):
+
+        match object.data.normals_domain:
+            case 'POINT':
+                # All faces are smooth shaded, so we can get normals from the vertices.
+                normal_source = object.data.vertex_normals
+            case 'CORNER' | 'FACE':
+                # We have a mix of sharp/smooth edges/faces or custom split normals,
+                # so need to get normals from corners.
+                normal_source = object.data.corner_normals
+            case _:
+                # Unreachable
+                raise AssertionError("Unexpected normals domain '%s'" % object.data.normals_domain)
+
+        np.empty(len(normal_source) * 3, dtype=np.single)
+        t_normal = np.empty(len(normal_source) * 3, dtype=np.single)
+        normal_source.foreach_get("vector", t_normal)
+
+        i = 0
         self.normallist = []
         for face in object.data.polygons:
-            self.normallist.append( cNormal( face, object ) )
+            vertnormals = []
+            for x in face.vertices:
+                vx = t_normal[i + 0]
+                vy = t_normal[i + 1]
+                vz = t_normal[i + 2]
+                i += 3
+                normal = mathutils.Vector((vx, (vy , -vy) [optionNormalY], vz))
+                vertnormals.append( [x, [aseFloat( y ) for y in normal.to_tuple( 4 )]] )
+            self.normallist.append( cNormal( face, vertnormals ) )
 
     def dump( self ):
         temp = ''
@@ -795,12 +824,10 @@ class cNormallist:
     def __repr__( self ):
         return '''\t\t*MESH_NORMALS {{\n{0}\t\t}}'''.format( self.dump() )
 class cNormal:
-    def __init__( self, face, object ):
+    def __init__( self, face, vertnormals ):
         self.faceindex = face.index
         self.facenormal = [aseFloat( x ) for x in face.normal.to_tuple( 4 )]
-        self.vertnormals = []
-        for x in face.vertices:
-            self.vertnormals.append( [x, [aseFloat( y ) for y in object.data.vertices[x].normal.to_tuple( 4 )]] )
+        self.vertnormals = vertnormals
 
     def __repr__( self ):
         return '''\t\t\t*MESH_FACENORMAL {0} {1} {2} {3}\n\t\t\t\t*MESH_VERTEXNORMAL {4} {5} {6} {7}\n\t\t\t\t*MESH_VERTEXNORMAL {8} {9} {10} {11}\n\t\t\t\t*MESH_VERTEXNORMAL {12} {13} {14} {15}\n'''.format( self.faceindex, self.facenormal[0], self.facenormal[1], self.facenormal[2], self.vertnormals[0][0], self.vertnormals[0][1][0], self.vertnormals[0][1][1], self.vertnormals[0][1][2], self.vertnormals[1][0], self.vertnormals[1][1][0], self.vertnormals[1][1][1], self.vertnormals[1][1][2], self.vertnormals[2][0], self.vertnormals[2][1][0], self.vertnormals[2][1][1], self.vertnormals[2][1][2] )
@@ -897,80 +924,13 @@ def removeDuplimeshes(list_objects):
     # Select objects by type and delete selected duplicate mesh objects
     objx = bpy.context.selected_objects
     for (i, o) in enumerate(objx):
-        if ('UCX_Copy_', 'Copy' in o.name):  #o.type == 'MESH' and ('UCX_' in o.name):
-            object_to_delete = bpy.data.objects[o.name]
-            bpy.data.objects.remove(object_to_delete, do_unlink=True)
+        o.select_set(state=False)
+        # bpy.context.active_object.select_set(state=False)
+        # if ('UCX_Copy_', 'Copy' in o.name):  #o.type == 'MESH' and ('UCX_' in o.name):
+            # object_to_delete = bpy.data.objects[o.name]
+            # bpy.data.objects.remove(object_to_delete, do_unlink=True)
     print(list_objects)
 
-
-#=================================================================================
-#            Save textures to ase location directory
-#===================================================================================
-
-def getdirtextures(flpath):
-        import pathlib
-        import shutil
-        import os
-        import bpy
-        #global X
-        
-        file_name = pathlib.Path(flpath).stem        #  "hotrod" 
-        file_dir = os.path.dirname(flpath)           # D:\outputfolder\
-        path = os.path.join(file_dir, file_name)     # D:\outputfolder\hotrod
-        dir_textures = "textures"
-        path2 =os.path.join(path, dir_textures)      # D:\outpufolder\hotrod\textures
-           
-        
-        try:
-            os.makedirs(path, exist_ok=True)
-            os.makedirs(path2, exist_ok=True)
-            #print("Directory '%s' created successfully" % directory)
-            
-        except OSError as error:
-            raise error("Directory '%s' can not be created")
-            
-            
-            
-        #obj = bpy.context.active_object
-        
-        C = bpy.context
-
-        # Iterate through all objects in selection
-        for ob in C.selected_objects:
-            if ob.type not in ('LIGHTS', 'CAMERA', 'VOLUME'): # OPTIONAL
-            # Iterate through all material slots
-                for slot in ob.material_slots:
-                    mat = slot.material
-                    nodes = mat.node_tree.nodes
-                    for n in nodes:
-                        if n.type == 'TEX_IMAGE':
-                            if n.image:
-                                path3 = os.path.join(path2, n.image.name)
-                                print(path3)
-                                n.image.save_render(path3)
-                        
-        #for slot in obj.material_slots:
-            #mat = slot.material
-            #nodes = mat.node_tree.nodes
-
-            #for n in nodes:
-                #if n.type == 'TEX_IMAGE':
-                    #if n.image:
-                        #path3 = os.path.join(path2, n.image.name)
-                        #print(path3)
-                        #n.image.save_render(path3)
-                        
-        #for index in  range(len(X)):
-            #if os.path.isfile(X[index]):
-                #print (X[0])#shutil.copy (X[index], path2)    # copia texturas para directório criado
-            #else:
-                #removeDuplimeshes (list_objects)
-                #raise Error("A texture image fails to copy. It not exists in pointed file path")
-        
-        flpath = (path + "/" + file_name + ".ase")
-        #X =[]
-        return flpath        
-        
 #===========================================================================
 # // General Helpers
 #===========================================================================
@@ -1058,37 +1018,42 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
     option_triangulate : BoolProperty(
             name = "Triangulate",
             description = "Triangulates all exportable objects",
-            default = True )
+            default = False )
 
     option_normals : BoolProperty(
             name = "Recalculate Normals",
             description = "Recalculate normals before exporting",
+            default = False )
+
+    option_normalY : BoolProperty(
+            name = "Invert Y-normal",
+            description = "Inverts Y-normal",
             default = True )
 
     option_remove_doubles : BoolProperty(
             name = "Remove Doubles",
             description = "Remove any duplicate vertices before exporting",
-            default = True )
+            default = False )
 
     option_apply_scale : BoolProperty(
             name = "Scale",
             description = "Apply scale transformation",
-            default = True )
+            default = False )
 
     option_apply_location : BoolProperty(
             name = "Location",
             description = "Apply location transformation",
-            default = True )
+            default = False )
 
     option_apply_rotation : BoolProperty(
             name = "Rotation",
             description = "Apply rotation transformation",
-            default = True )
+            default = False )
 
     option_smoothinggroups : BoolProperty(
             name = "Smoothing Groups",
             description = "Construct hard edge islands as smoothing groups",
-            default = True )
+            default = False )
 
     option_separate : BoolProperty(
             name = "Separate",
@@ -1112,15 +1077,16 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
             max = 1000.0,
             soft_min = 0.01,
             soft_max = 1000.0,
-            default = 16.0 )
+            default = 1.0 )
 
     def draw( self, context ):
         layout = self.layout
 
         box = layout.box()
         box.label(text='Essentials:' )
-        #box.prop( self, 'option_triangulate' )
+        box.prop( self, 'option_triangulate' )
         box.prop( self, 'option_normals' )
+        box.prop( self, 'option_normalY' )
         box.prop( self, 'option_remove_doubles' )
         box.label( text="Transformations:" )
         box.prop( self, 'option_apply_scale' )
@@ -1143,7 +1109,6 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
 
     def writeASE( self, filename, data ):
         print( '\nWriting', filename )
-        
         try:
             file = open( filename, 'w' )
         except IOError:
@@ -1155,6 +1120,7 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
     def execute( self, context ):
         start = time.time()
 
+        global optionNormalY
         global optionScale
         global optionSubmaterials
         global optionSmoothingGroups
@@ -1169,16 +1135,17 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
         global numMats
         global matList
         global list_objects
-        global fpath
-        from pathlib import Path
 
-        
+
+        import bpy
+
         # Set globals and reinitialize ase components
         aseHeader = ''
         aseScene = ''
         aseMaterials = ''
         aseGeometry = ''
 
+        optionNormalY = self.option_normalY
         optionScale = self.option_scale
         optionSubmaterials = self.option_submaterials
         optionSmoothingGroups = self.option_smoothinggroups
@@ -1188,7 +1155,6 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
         currentMatId = 0
         numMats = 0
         list_objects = []
-        fpath =[]
 
         # Make a list of selected objects
         for obj in bpy.context.selected_objects:
@@ -1196,16 +1162,16 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
                 list_objects.append(obj.name)
 
         # Duplicate selected meshes
-        selected_objects = [o for o in bpy.context.scene.objects if o.select_get()]
-        bpy.ops.object.duplicate()
-        objx = bpy.context.selected_objects
+        # selected_objects = [o for o in bpy.context.scene.objects if o.select_get()]
+        # bpy.ops.object.duplicate()
+        # objx = bpy.context.selected_objects
         # Rename duplicated objects
-        for (i, o) in enumerate(objx):
-            if ('UCX_' in o.name):
-                o.name = "UCX_Copy" + o.name.format(
-                    i)  # 'UCX_Co#pia_{:03d}'.format(i)   # rename duplicated noncollision objects
-            else:
-                o.name = "Copy" + o.name.format(i)  # 'Co#pia_{:03d}'.format(i)  # rename duplicated mesh objects
+        # for (i, o) in enumerate(objx):
+            # if ('UCX_' in o.name):
+                # o.name = "UCX_Copy" + o.name.format(
+                    # i)  # 'UCX_Co#pia_{:03d}'.format(i)   # rename duplicated noncollision objects
+            # else:
+                # o.name = "Copy" + o.name.format(i)  # 'Co#pia_{:03d}'.format(i)  # rename duplicated mesh objects
 
 
         # Build ASE Header, Scene
@@ -1255,22 +1221,17 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
         aseModel += aseMaterials
         aseModel += aseGeometry
 
-        self.filepath = getdirtextures(self.filepath)  # call function to create file directory, dir name like ASE model name and copy textures
-               
-        self.writeASE(self.filepath, aseModel )
-        
+        # Write the ASE file
+        self.writeASE( self.filepath, aseModel )
 
         lapse = ( time.time() - start )
         print( 'Completed in ' + str( lapse ) + ' seconds' )
 
         # Select objects by type and delete selected duplicate mesh objects
         removeDuplimeshes (list_objects)
-        
-        
+
+
         return {'FINISHED'}
-# Make dir on save
-        
-         
 
 def menu_func( self, context ):
     self.layout.operator( ExportAse.bl_idname, text = "ASCII Scene Exporter (.ase)" )
