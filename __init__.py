@@ -1038,17 +1038,17 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
     option_apply_scale : BoolProperty(
             name = "Scale",
             description = "Apply scale transformation",
-            default = False )
+            default = True )
 
     option_apply_location : BoolProperty(
             name = "Location",
             description = "Apply location transformation",
-            default = False )
+            default = True )
 
     option_apply_rotation : BoolProperty(
             name = "Rotation",
             description = "Apply rotation transformation",
-            default = False )
+            default = True )
 
     option_smoothinggroups : BoolProperty(
             name = "Smoothing Groups",
