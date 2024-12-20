@@ -125,7 +125,8 @@ class cMaterials:
         self.material_list = []
 
         # Get all of the materials used by non-collision object meshes  
-        for object in bpy.context.selected_objects:
+        # for object in bpy.context.selected_objects:
+        for object in bpy.context.view_layer.objects:
 
             if collisionObject( object ) == True:
                 continue
@@ -922,7 +923,8 @@ def removeDuplimeshes(list_objects):
     # Change context to object mode
     bpy.ops.object.mode_set(mode='OBJECT')
     # Select objects by type and delete selected duplicate mesh objects
-    objx = bpy.context.selected_objects
+    # objx = bpy.context.selected_objects
+    objx = bpy.context.view_layer.objects
     for (i, o) in enumerate(objx):
         o.select_set(state=False)
         # bpy.context.active_object.select_set(state=False)
@@ -1101,11 +1103,12 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
 
     @classmethod
     def poll( cls, context ):
-        active = context.active_object
-        selected = context.selected_objects
-        camera = context.scene.camera
-        ok = selected or camera
-        return ok
+        # active = context.active_object
+        # selected = context.selected_objects
+        # camera = context.scene.camera
+        # ok = selected or camera
+        # return ok
+        return True
 
     def writeASE( self, filename, data ):
         print( '\nWriting', filename )
@@ -1157,7 +1160,8 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
         list_objects = []
 
         # Make a list of selected objects
-        for obj in bpy.context.selected_objects:
+        # for obj in bpy.context.selected_objects:
+        for obj in bpy.context.view_layer.objects:
             if obj not in list_objects:
                 list_objects.append(obj.name)
 
@@ -1176,15 +1180,15 @@ class ExportAse( bpy.types.Operator, ExportHelper ):
 
         # Build ASE Header, Scene
         print( '\nAscii Scene Export by MCampagnini\n' )
-        print( 'Objects selected: ' + str( len( bpy.context.selected_objects ) ) )
+        # print( 'Objects selected: ' + str( len( bpy.context.selected_objects ) ) )
         aseHeader = str( cHeader() )
         aseScene = str( cScene() )
         aseMaterials = str( cMaterials() )
 
 
-
         # Apply applicable options
-        for object in bpy.context.selected_objects:
+        # for object in bpy.context.selected_objects:
+        for object in bpy.context.view_layer.objects:
             if object.type == 'MESH':
                 bpy.context.view_layer.objects.active = object
                 bpy.context.active_object.select_set(state=True)
