@@ -805,12 +805,14 @@ class cNormallist:
 
         i = 0
         self.normallist = []
+        split = len(t_normal)/3 == len(object.data.polygons)*3
         for face in object.data.polygons:
             vertnormals = []
             for x in face.vertices:
-                vx = t_normal[i + 0]
-                vy = t_normal[i + 1]
-                vz = t_normal[i + 2]
+                idx = (x*3,i) [split]
+                vx = t_normal[idx + 0]
+                vy = t_normal[idx + 1]
+                vz = t_normal[idx + 2]
                 i += 3
                 normal = mathutils.Vector((vx, (vy , -vy) [optionNormalY], vz))
                 vertnormals.append( [x, [aseFloat( y ) for y in normal.to_tuple( 4 )]] )
